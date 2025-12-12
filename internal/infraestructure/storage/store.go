@@ -2,6 +2,7 @@ package starage
 
 import (
 	"context"
+	"path/filepath"
 	"sync"
 	"time"
 
@@ -40,7 +41,19 @@ func (s *Store) Del(ctx context.Context, key string) int {
 }
 
 func (s *Store) Exists(ctx context.Context, key string) bool {
-	panic("unimplemented")
+	if ctx.Err() != nil {
+		return false
+	}
+
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	item, found := s.data[key]
+	if !found {
+		return false
+	}
+
+	return !item.IsExpired(time.Now().Unix())
 }
 
 func (s *Store) Expire(ctx context.Context, key string, seconds int) bool {
@@ -81,14 +94,43 @@ func (s *Store) Get(ctx context.Context, key string) (string, bool) {
 	return item.Value, true
 }
 
-func (s *Store) Keys(ctx context.Context, pattern string) bool {
-	panic("unimplemented")
+func (s *Store) Keys(ctx context.Context, pattern string) []string {
+	if ctx.Err() != nil {
+		return []string{}
+	}
+
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	now := time.Now().Unix()
+	var matchedKeys []string
+	for key, item := range s.data {
+		if item.IsExpired(now) {
+			continue
+		}
+		if s.matchPattern(key, pattern) {
+			matchedKeys = append(matchedKeys, key)
+		}
+	}
+	return matchedKeys
 }
 
 func (s *Store) Persist(ctx context.Context, key string) bool {
-	panic("unimplemented")
-}
+	if ctx.Err() != nil {
+		return false
+	}
 
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	item, found := s.data[key]
+	if !found {
+		return false
+	}
+
+	item.ExpiresAt = nil
+	return true
+}
 func (s *Store) Set(ctx context.Context, key string, value string) {
 	if ctx.Err() != nil {
 		return
@@ -104,15 +146,49 @@ func (s *Store) Set(ctx context.Context, key string, value string) {
 }
 
 func (s *Store) Size(ctx context.Context) int {
-	panic("unimplemented")
+	if ctx.Err() != nil {
+		return 0
+	}
+
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return len(s.data)
 }
 
 func (s *Store) StartCleanup(intervalMs int64) {
-	panic("unimplemented")
+	interval := time.Duration(intervalMs) * time.Millisecond
+
+	go func() {
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+
+		for {
+			select {
+			case <-ticker.C:
+				s.cleanupExpiredItems()
+			case <-s.stopCleanup:
+				return
+			}
+		}
+
+	}()
 }
 
-func (s *Store) StopClenup() {
-	panic("unimplemented")
+func (s *Store) cleanupExpiredItems() {
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	now := time.Now().Unix()
+	for key, item := range s.data {
+		if item.IsExpired(now) {
+			delete(s.data, key)
+		}
+	}
+}
+
+func (s *Store) StopCleanup() {
+	close(s.stopCleanup)
 }
 
 func (s *Store) TTl(ctx context.Context, key string) int64 {
@@ -138,4 +214,18 @@ func (s *Store) TTl(ctx context.Context, key string) int64 {
 		return -2
 	}
 	return remaining
+}
+
+func (s *Store) matchPattern(key, pattern string) bool {
+
+	if pattern == "*" {
+		return true
+	}
+
+	matched, err := filepath.Match(pattern, key)
+	if err != nil {
+		return key == pattern
+	}
+	return matched
+
 }

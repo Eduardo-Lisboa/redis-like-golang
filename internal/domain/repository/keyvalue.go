@@ -9,9 +9,9 @@ type KeyValuerepository interface {
 	Expire(ctx context.Context, key string, seconds int) bool
 	TTl(ctx context.Context, key string) int64
 	Persist(ctx context.Context, key string) bool
-	Keys(ctx context.Context, pattern string) bool
+	Keys(ctx context.Context, pattern string) []string
 	Exists(ctx context.Context, key string) bool
 	Size(ctx context.Context) int
 	StartCleanup(intervalMs int64)
-	StopClenup()
+	StopCleanup()
 }
